@@ -1,0 +1,150 @@
+---
+title: "Census Analysis"
+author: "Andrew Jensen"
+date: "2/26/2020"
+output: pdf_document
+---
+
+# PREAMBLE
+[Census income](https://archive.ics.uci.edu/ml/datasets/Census+Income)
+https://archive.ics.uci.edu/ml/datasets/Census+Income
+
+## Preparation
+- Recombine test and train data, clean empty lines.  
+- Quote wrap qualitative data and remove nasty characters with python script.  
+
+**Column info**  
+**age:** continuous.  
+**workclass:** Private, Self-emp-not-inc, Self-emp-inc, Federal-gov, Local-gov, State-gov, Without-pay, Never-worked.  
+**fnlwgt:** continuous.  
+**education:** Bachelors, Some-college, 11th, HS-grad, Prof-school, Assoc-acdm, Assoc-voc, 9th, 7th-8th, 12th, Masters, 1st-4th, 10th, Doctorate, 5th-6th, Preschool.  
+**education-num:** continuous.  
+**marital-status:** Married-civ-spouse, Divorced, Never-married, Separated, Widowed, Married-spouse-absent, Married-AF-spouse.  
+**occupation:** Tech-support, Craft-repair, Other-service, Sales, Exec-managerial, Prof-specialty, Handlers-cleaners, Machine-op-inspct, Adm-clerical, Farming-fishing, Transport-moving, Priv-house-serv, Protective-serv, Armed-Forces.  
+**relationship:** Wife, Own-child, Husband, Not-in-family, Other-relative, Unmarried.  
+**race: White, Asian-Pac-Islander, Amer-Indian-Eskimo, Other, Black.  
+**sex: Female, Male.  
+**capital-gain:** continuous.  
+**capital-loss:** continuous.  
+**hours-per-week:** continuous.  
+**native-country:** United-States, Cambodia, England, Puerto-Rico, Canada, Germany, Outlying-US(Guam-USVI-etc), India, Japan, Greece, South, China, Cuba, Iran, Honduras, Philippines, Italy, Poland, Jamaica, Vietnam, Mexico, Portugal, Ireland, France, Dominican-Republic, Laos, Ecuador, Taiwan, Haiti, Columbia, Hungary, Guatemala, Nicaragua, Scotland, Thailand, Yugoslavia, El-Salvador, Trinadad&Tobago, Peru, Hong, Holand-Netherlands.  
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(1234)
+```
+
+# dont forget to set working directory
+```{r import and sample data}
+# see python script for the few csv modifications
+census <- read.table(file = './adult_prepped.csv', header = TRUE, sep = ',')
+
+# sample data to train and test sets
+ct <- sample(nrow(census), nrow(census) * 0.8, replace = FALSE)
+ctrain <- census[ct,]
+ctest <- census[-ct,]
+
+# Plot Occupation by age while looking for target which is probable income
+plot(census$occupation, census$education.num, xlab="Occupation", ylab="Education", pch=21, bg=c('green', 'blue') [unclass(census$prob.income)])
+```
+
+Notice the relationship between occupation and probable income
+
+# Logistic regression
+```{r Logistic regression}
+library(ROCR)
+glm0 <- glm(prob.income~education+hours.per.week+age+workclass+marital.status*relationship, data = ctrain, family = binomial)
+
+# probabilities, predictions, and accuracy of new model
+probs <- predict.glm(glm0, newdata=ctest, type = "response")
+pr <- prediction(probs, ctest$prob.income) # specific to performance
+pred <- ifelse(probs>0.5, 2, 1)
+
+# prep data for confusion matrix
+facprob <- factor(as.integer(ctest$prob.income))
+facpred <- factor(pred, levels = 1:2)
+
+# TPR = sensitivity, FPR=specificity
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+
+# setup and use confusion matrix
+# summary(glm0) very verbose
+table(pred, ctest$prob.income)
+plot(prf)
+auc
+
+```
+
+# Naive Bayes
+```{r Naive Bayes}
+library(e1071)
+nb0 <- naiveBayes(prob.income~.-capital.gain-capital.loss, data = ctrain)
+summary(nb0)
+
+# create predictions from NB model
+#raw <- predict(nb0, newdata=ctest, type="raw")
+pred2 <- predict(nb0, newdata=ctest, type="class")
+
+# print classifier statistics on NB model
+library(caret)        # grab mlbench
+facpreds <- factor(as.integer(pred2), levels = 1:2)
+facpreds[is.na(facpreds)] <- 2
+factarg <- factor(as.integer(ctest$prob.income), levels = 1:2)
+factarg[is.na(factarg)] <- 2
+
+# confusion matrix for all the things
+confusionMatrix(facpreds, factarg, positive = '2')
+```
+
+# Decision Tree
+```{r Decision Trees}
+library(rpart)
+tree_cen <- rpart(prob.income~., data=census, method = 'class')
+plot(tree_cen)
+text(tree_cen, cex=0.75, pretty=1)
+#summary(tree_cen)
+
+tree_pruned <- prune.rpart(tree_cen, cp = 0.7)
+# plot(tree_pruned)
+# text(tree_pruned, cex=0.75, pretty=1)
+summary(tree_pruned)
+
+pred_cen <- predict(tree_cen, newdata=ctest, type="class")
+pred_pruned <- predict(tree_pruned, newdata=ctest, type="class")
+
+print("First tree")
+table(pred_cen, ctest$prob.income)
+print(paste("Accuracy: ", mean(pred_cen==ctest$prob.income)))
+
+print("Pruned tree")
+table(pred_pruned, ctest$prob.income)
+print(paste("Accuracy: ", mean(pred_pruned==ctest$prob.income)))
+```
+
+**Help: first condition is relationship **  
+
+
+# RESULTS  
+## Algorithms ranked  
+1. Logistic Regression - Accuracy:0.8723435  
+- Predictors tweaked for accuracy first.  
+- Summary emphasized the predictors that went on to make better models.  
+- Ended up producing the most accurate model.  
+
+2. Decision Tree       - Accuracy:0.842563210154571  
+- Simplest implementation worked best for this algorithm  
+- Reemphasized the importance of predictors in logit summary  
+- More positives and less false negative than logit  
+- Pruning didnt help the fit at all and made it more inaccurate  
+
+3. Naive Bayes         - Accuracy:0.8161   
+- More time consuming to implement (factoring model statistics warranted data replacement)  
+- Alot more True negatives while suffering every other instance in the table  
+- Worked better with more predictors   
+- Maybe it was just be but it was very tempremental about what it would allow for a formula  
+
+## Analysis
+Its interesting to see how much of an impact relationships make on probable income, as well as how unnecessary capital gain and lose are for creating an accurate model. Education and occupation made the biggest impact and were most relevent to each model, so boost those two things in life and you could make more money. 

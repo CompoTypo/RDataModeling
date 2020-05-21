@@ -1,0 +1,145 @@
+---
+title: "protein-properties"
+author: "Andrew Jensen"
+date: "2/29/2020"
+output: pdf_document
+---
+# PREAMBLE  
+[CASP](https://archive.ics.uci.edu/ml/datasets/Physicochemical+Properties+of+Protein+Tertiary+Structure#)  
+https://archive.ics.uci.edu/ml/datasets/Physicochemical+Properties+of+Protein+Tertiary+Structure#  
+
+## Preparation
+- This data was pretty much quantitative so I was able to import it as is.  
+
+**Column info**  
+**RMSD** - Size of the residue.  
+**F1** - Total surface area.  
+**F2** - Non polar exposed area.  
+**F3** - Fractional area of exposed non polar residue.  
+**F4** - Fractional area of exposed non polar part of residue.  
+**F5** - Molecular mass weighted exposed area.  
+**F6** - Average deviation from standard exposed area of residue.  
+**F7** - Euclidian distance.  
+**F8** - Secondary structure penalty.  
+**F9** - Spacial Distribution constraints (N,K Value).  
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(1234)
+```
+
+# dont forget to set working directory
+```{r data import}
+casp <- read.csv(file = 'CASP.csv')
+summary(casp)
+# pairs(casp) takes too long
+
+spec <- c(train = .6, test = .2, validate = .2)
+casp_df <- sample(cut(seq(nrow(casp)), nrow(casp)*cumsum(c(0,spec)), labels = names(spec)), replace = TRUE)
+
+casp_set <- split(casp, casp_df)
+```
+
+# Linear Regression
+```{r linReg}
+lm0 <- lm(F1~F2*F3*F5*F6*F7*F8, data = casp_set$train)  
+summary(lm0)
+
+par(mfrow = c(2,2))
+plot(lm0)
+
+pred <- predict(lm0, newdata=casp_set$test)
+mean((pred - casp_set$test$F1)^2)
+cor(pred, casp_set$test$F1)
+```
+
+# K - nearest neighbor
+```{r KNN}
+library(caret)
+kfit1 <- knnreg(casp_set$train[,-2], casp_set$train[,2], k=3, prob = TRUE)
+res1 <- predict(kfit1, casp_set$test[,-2])
+cor_knn1 <- cor(res1, casp_set$test$F1)
+mse_knn1 <- mean((res1 - casp_set$test$F1)^2)
+
+tr_scaled <- casp_set$train[,-2]
+means <- sapply(tr_scaled, mean)
+stdvs <- sapply(tr_scaled, sd)
+tr_scaled <- scale(casp_set$train[,-2], center = means, scale = stdvs)
+ts_scaled <- scale(casp_set$test[,-2], center = means, scale = stdvs)
+kfit2 <- knnreg(tr_scaled, casp_set$train[,2], k=5, prob = TRUE)
+res2 <- predict(kfit2, ts_scaled)
+cor_knn2 <- cor(res2, casp_set$test[,2])
+mse_knn2 <- mean((res2 - casp_set$test[,2])^2)
+
+cor_knn1
+mse_knn1
+cor_knn2
+mse_knn2
+```
+
+Scaling the data actually produced a worse model and close to doubled the mean standard error.
+
+
+# Decision Tree
+```{r Decision Trees}
+library(tree)
+tree_casp <- tree(F1~., data=casp)
+plot(tree_casp)
+text(tree_casp, cex=0.5, pretty=1)
+tree_pred1 <- predict(tree_casp, newdata=casp_set$test)
+cor(tree_pred1, casp_set$test$F1)
+sqrt(mean((tree_pred1 - casp_set$test$F1)^2))
+mean((tree_pred1 - casp_set$test$F1)^2)
+
+tree_pruned <- prune.tree(tree_casp, best=7) 
+plot(tree_pruned)
+text(tree_pruned, pretty=0)
+pred_tree_pruned <- predict(tree_pruned, newdata=casp_set$test)
+cor(pred_tree_pruned, casp_set$test$F1)
+sqrt(mean((pred_tree_pruned - casp_set$test$F1)^2))
+mean((pred_tree_pruned - casp_set$test$F1)^2)
+```
+
+
+# Random Forest
+```{r Random Forest}
+library(randomForest)
+set.seed(1234)
+rf <- randomForest(F1~F2+F4+F5+F6+F8, data=casp_set$train, importance=TRUE)
+rf
+
+pred_rf <- predict(rf, newdata=casp_set$test)
+cor_rf <- cor(pred_rf, casp_set$test$F1)
+print(paste('corr:', cor_rf))
+rmse_rf <- sqrt(mean((pred_rf-casp_set$test$F1)^2))
+print(paste('rmse:', rmse_rf))
+```
+
+
+# RESULTS  
+## Algorithms ranked  
+1. **Linear Regression** - Corr:0.9999492  MSE:1705.029  
+- Produced great correlations for many predictor combinations, especially the simpler the set.  
+- Quickest implementation without costing too much runtime.  
+- Reasonably low MSE given the data.  
+
+2. **KNN**               - Corr:0.9978489  MSE:72126.92  
+- Gave relatively good results and easier implementation using the caret version of this algorithm.  
+- Like clarified earlier, every predictor is significant, so scaling was not productive.  
+- Very high MSE, closer to twice as worse after pruning.  
+- Still seems ok overall.  
+
+3. **Decision Tree**     - Corr:0.9833599  MSE:553600.4  
+- Correlation and MSE are the worst of the three.  
+- Like clarified earlier, every predictor is significant, so pruning was not productive.  
+- Very high MSE, closer to twice as worse after pruning.  
+
+## ENSAMBLE METHOD  
+**Random forest**        - Corr:0.999028410740686   MSE:26218
+- Easier to implement than xgboost
+- Extremely long execution time (Ive tried a few groups of predictors)
+- Mean standard error is in the middle but not spectacular compared to LinReg
+- Better correlation than most others. It would be second to linear regressions
+
+## ANALYSIS
+Information was very sparse on this data set. However, its obvious how each predictor is predictive of itself and all others, showing some and statistical ubiquity of protein despite physical variation. Data outside the predictive capabilities could be seen as malformed anomolies or extreme case data.
